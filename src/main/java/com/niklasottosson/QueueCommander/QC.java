@@ -1,5 +1,10 @@
 package com.niklasottosson.QueueCommander;
 
+import com.googlecode.lanterna.gui2.Label;
+import com.googlecode.lanterna.gui2.Panel;
+import com.googlecode.lanterna.gui2.Window;
+import com.googlecode.lanterna.terminal.swing.AWTTerminalFontConfiguration;
+import com.niklasottosson.QueueCommander.model.Configuration;
 import com.niklasottosson.QueueCommander.model.Queue;
 import com.googlecode.lanterna.TerminalSize;
 import com.googlecode.lanterna.gui2.*;
@@ -12,6 +17,7 @@ import com.googlecode.lanterna.terminal.Terminal;
 import com.niklasottosson.QueueCommander.view.MainPanel;
 import org.apache.commons.lang3.StringUtils;
 
+import java.awt.*;
 import java.io.IOException;
 import java.util.List;
 
@@ -38,7 +44,7 @@ public class QC {
     private static Label leftLabel;
     private static Label leftQueueManagerLabel;
     private static Label rightLabel;
-    private static IBMMQ leftQueueManager;
+    private static ActiveMQ leftQueueManager;
     private static IBMMQ rightQueueManager;
     private static Configuration leftConfiguration;
     private static Configuration rightConfiguration;
@@ -47,13 +53,20 @@ public class QC {
         //Configuration configuration = new Configuration("localhost", 1414, "QM1", "DEV.ADMIN.SVRCONN", "admin", "passw0rd");
         Configuration leftConfiguration = new Configuration("192.168.0.105", 1414, "QM1", "DEV.ADMIN.SVRCONN", "admin", "passw0rd");
 
-        leftQueueManager = new IBMMQ(leftConfiguration);
+        leftQueueManager = new ActiveMQ(leftConfiguration);
         //rightQueueManager = new IBMMQ(rightConfiguration);
         //GUI gui = new GUI();
 
         // Setup terminal and screen layers
         try {
-            terminal = new DefaultTerminalFactory().createTerminal();
+            DefaultTerminalFactory factory = new DefaultTerminalFactory();
+            factory.setTerminalEmulatorFontConfiguration(
+                AWTTerminalFontConfiguration.newInstance(
+                    new Font("Monospaced", Font.PLAIN, 12) // Soed not work in IntelliJ (depends on the terminal app used)
+                )
+            );
+
+            terminal = factory.createTerminal();
             // Create screen
             screen = new TerminalScreen(terminal);
             gui = new MultiWindowTextGUI(screen);
@@ -119,6 +132,7 @@ public class QC {
                     return true;
                 }
                 if(key.getCharacter() == Character.valueOf('r') || key.getCharacter() == Character.valueOf('R')) {
+                    System.out.println("Update");
                     update();
                 }
                 if(key.getCharacter() == Character.valueOf('q') || key.getCharacter() == Character.valueOf('Q')) {
@@ -150,7 +164,7 @@ public class QC {
 
     }
 
-    public static void update(){
+    public static void update() {
         if(leftQueueManager.connect()){
             //System.out.println("Everything is ok");
         }
@@ -160,7 +174,7 @@ public class QC {
 
         List<Queue> queues = leftQueueManager.getQueueList();
 
-        //System.out.println("Number of queues found: " + queues.size());
+        System.out.println("Number of queues found: " + queues.size());
 
 
         // Remove old items
@@ -200,7 +214,7 @@ public class QC {
 
         // At init we do not know the max length
         if(maxLength == 0){
-            maxLength = 35;
+            maxLength = 25;
         }
 
         label = StringUtils.rightPad(label, maxLength);

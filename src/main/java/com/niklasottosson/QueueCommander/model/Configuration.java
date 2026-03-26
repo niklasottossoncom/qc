@@ -1,4 +1,4 @@
-package com.niklasottosson.QueueCommander;
+package com.niklasottosson.QueueCommander.model;
 
 public class Configuration {
     private String host;

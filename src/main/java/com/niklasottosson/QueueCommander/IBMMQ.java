@@ -1,5 +1,6 @@
 package com.niklasottosson.QueueCommander;
 
+import com.niklasottosson.QueueCommander.model.Configuration;
 import com.niklasottosson.QueueCommander.model.Queue;
 import com.ibm.mq.MQException;
 import com.ibm.mq.MQQueueManager;
