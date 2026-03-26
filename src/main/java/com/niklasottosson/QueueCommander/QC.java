@@ -35,46 +35,38 @@ public class QC {
     private static Screen screen;
     private static Window window;
     private static WindowBasedTextGUI gui;
-    private static Panel leftQueuePanel;
-    private static Panel rightQueuePanel;
+    private static Panel queuePanel;
     private static int rows;
     private static int columns;
-    private static ActionListBox leftABbox;
+    private static ActionListBox aBbox;
     private static ActionListBox rightABbox;
-    private static Label leftLabel;
-    private static Label leftQueueManagerLabel;
-    private static Label rightLabel;
-    private static ActiveMQ leftQueueManager;
-    private static IBMMQ rightQueueManager;
-    private static Configuration leftConfiguration;
-    private static Configuration rightConfiguration;
+    private static Label label;
+    private static Label queueManagerLabel;
+    private static ActiveMQ queueManager;
 
     public static <leftQueueManagerLabel> void main(String[] args) throws IOException {
         //Configuration configuration = new Configuration("localhost", 1414, "QM1", "DEV.ADMIN.SVRCONN", "admin", "passw0rd");
-        Configuration leftConfiguration = new Configuration("192.168.0.105", 1414, "QM1", "DEV.ADMIN.SVRCONN", "admin", "passw0rd");
+        Configuration configuration = new Configuration("192.168.0.105", 1414, "QM1", "DEV.ADMIN.SVRCONN", "admin", "passw0rd");
 
-        leftQueueManager = new ActiveMQ(leftConfiguration);
-        //rightQueueManager = new IBMMQ(rightConfiguration);
-        //GUI gui = new GUI();
+        queueManager = new ActiveMQ(configuration);
 
         // Setup terminal and screen layers
         try {
             DefaultTerminalFactory factory = new DefaultTerminalFactory();
             factory.setTerminalEmulatorFontConfiguration(
                 AWTTerminalFontConfiguration.newInstance(
-                    new Font("Monospaced", Font.PLAIN, 12) // Soed not work in IntelliJ (depends on the terminal app used)
+                    new Font("Monospaced", Font.PLAIN, 12) // Doed not work in IntelliJ (depends on the terminal app used)
                 )
             );
+            //factory.setInitialTerminalSize(new TerminalSize(120, 40)); // columns x rows
 
             terminal = factory.createTerminal();
             // Create screen
             screen = new TerminalScreen(terminal);
             gui = new MultiWindowTextGUI(screen);
 
-            leftABbox = new ActionListBox();
-            leftABbox.addItem("--- Queues ---", null);
-            rightABbox = new ActionListBox();
-            rightABbox.addItem("--- Queues ---", null);
+            aBbox = new ActionListBox();
+            aBbox.addItem("--- Queues ---", null);
 
             screen.startScreen();
             screen.refresh();
@@ -90,25 +82,15 @@ public class QC {
             Panel mainPanel = new MainPanel().init(columns, rows);
 
             // Setup left panel
-            leftQueuePanel = new Panel();
-            leftQueuePanel.setPreferredSize(new TerminalSize(columns/2 - 6, rows - 10));
-            leftQueueManagerLabel = new Label("Queue manager: " + leftConfiguration.getQmanager());
-            leftLabel = new Label(getLabel(0));
-            leftQueuePanel.addComponent(leftQueueManagerLabel);
-            leftQueuePanel.addComponent(leftLabel);
-            leftQueuePanel.addComponent(leftABbox);
+            queuePanel = new Panel();
+            queuePanel.setPreferredSize(new TerminalSize(columns - 8, rows - 13)); // full width, fill above legend
+            queueManagerLabel = new Label("Queue manager: " + configuration.getQmanager());
+            label = new Label(getLabel(0));
+            queuePanel.addComponent(queueManagerLabel);
+            queuePanel.addComponent(label);
+            queuePanel.addComponent(aBbox);
 
-            mainPanel.addComponent(leftQueuePanel.withBorder(Borders.singleLine()));
-
-
-            // Setup right panel
-            rightQueuePanel = new Panel();
-            rightQueuePanel.setPreferredSize(new TerminalSize(columns/2 - 6, rows - 10));
-            rightLabel = new Label(getLabel(0));
-            rightQueuePanel.addComponent(rightLabel);
-            rightQueuePanel.addComponent(rightABbox);
-
-            mainPanel.addComponent(rightQueuePanel.withBorder(Borders.singleLine()));
+            mainPanel.addComponent(queuePanel.withBorder(Borders.singleLine()));
 
             // Add legend
             Panel legend = new Panel();
@@ -165,31 +147,31 @@ public class QC {
     }
 
     public static void update() {
-        if(leftQueueManager.connect()){
+        if(queueManager.connect()){
             //System.out.println("Everything is ok");
         }
         else {
             //System.out.println("Everything is bad");
         }
 
-        List<Queue> queues = leftQueueManager.getQueueList();
+        List<Queue> queues = queueManager.getQueueList();
 
         System.out.println("Number of queues found: " + queues.size());
 
 
         // Remove old items
-        leftABbox.clearItems();
-        leftABbox.clearItems();
+        aBbox.clearItems();
+        aBbox.clearItems();
 
         int maxLength = getLongestQueueName(queues);
 
-        leftLabel.setText(getLabel(maxLength));
+        label.setText(getLabel(maxLength));
 
         for(Queue queue: queues){
-            leftABbox.addItem(queue.getActionBoxLabel(maxLength), null);
+            aBbox.addItem(queue.getActionBoxLabel(maxLength), null);
         }
 
-        if(leftQueueManager.disconnect()){
+        if(queueManager.disconnect()){
             //System.out.println("Disconnect successfull");
         }
         else {
@@ -214,11 +196,11 @@ public class QC {
 
         // At init we do not know the max length
         if(maxLength == 0){
-            maxLength = 25;
+            maxLength = 26;
         }
 
         label = StringUtils.rightPad(label, maxLength);
-        label += " Depth           PutDate               GetDate";
+        label += " Depth";
 
         return label;
     }

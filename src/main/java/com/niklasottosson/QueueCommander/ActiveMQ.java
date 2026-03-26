@@ -1,11 +1,13 @@
 package com.niklasottosson.QueueCommander;
 
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -16,6 +18,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import jakarta.jms.*;
+
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
 
 public class ActiveMQ {
     private Connection connection;
@@ -71,12 +76,15 @@ public class ActiveMQ {
         List<Queue> result = new ArrayList<>();
 
         // Adjust as needed or wire from Configuration/setConfig
-        final String jolokiaUrl = "http://localhost:8161/api/jolokia/";
+        final String jolokiaUrl = "https://localhost:8161/api/jolokia/";
         final String username = "admin";
         final String password = "admin";
 
         try {
-            HttpClient client = HttpClient.newHttpClient();
+            HttpClient client = createHttpClientWithTruststore(
+                    "/Users/malen501/Development/certs/truststore.jks",
+                    "password"
+            );
 
             // 1) Find all queue MBeans
             String searchPayload =
@@ -84,6 +92,8 @@ public class ActiveMQ {
             String searchBody = postJolokia(client, jolokiaUrl, username, password, searchPayload);
 
             List<String> mbeans = extractMBeansFromSearch(searchBody);
+
+            mbeans.sort(String::compareToIgnoreCase);
 
             // 2) Read Name + QueueSize for each queue MBean
             for (String mbean : mbeans) {
@@ -173,5 +183,29 @@ public class ActiveMQ {
         if (s == null) return null;
         return s.replace("\\\"", "\"").replace("\\\\", "\\");
     }
+
+    private HttpClient createHttpClientWithTruststore(String truststorePath, String truststorePassword)
+            throws Exception {
+        // Load the truststore
+        KeyStore trustStore = KeyStore.getInstance("JKS");
+        try (FileInputStream fis = new FileInputStream(truststorePath)) {
+            trustStore.load(fis, truststorePassword.toCharArray());
+        }
+
+        // Create TrustManagerFactory with the truststore
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(
+                TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(trustStore);
+
+        // Create SSLContext with the trust managers
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, tmf.getTrustManagers(), new java.security.SecureRandom());
+
+        // Create HttpClient with the SSLContext
+        return HttpClient.newBuilder()
+                .sslContext(sslContext)
+                .build();
+    }
+
 
 }
