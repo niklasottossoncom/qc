@@ -7,6 +7,7 @@ qc:
       rows: 30
   ssl:
     keystore:
+      location: "file:keystore.p12"
       password: "password"
       type: "PKCS12"
     truststore:
