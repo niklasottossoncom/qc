@@ -7,6 +7,13 @@ public class Configuration {
     private String channel;
     private String user;
     private String password;
+    private String jolokiaUrl;
+    private String truststoreLocation;
+    private String truststorePassword;
+    private String truststoreType;
+
+    public Configuration() {
+    }
 
     public Configuration(String host, int port, String qmanager, String channel, String user, String password){
         this.host = host;
@@ -65,11 +72,44 @@ public class Configuration {
         this.password = password;
     }
 
+    public String getJolokiaUrl() {
+        return jolokiaUrl;
+    }
+
+    public void setJolokiaUrl(String jolokiaUrl) {
+        this.jolokiaUrl = jolokiaUrl;
+    }
+
+    public String getTruststoreLocation() {
+        return truststoreLocation;
+    }
+
+    public void setTruststoreLocation(String truststoreLocation) {
+        this.truststoreLocation = truststoreLocation;
+    }
+
+    public String getTruststorePassword() {
+        return truststorePassword;
+    }
+
+    public void setTruststorePassword(String truststorePassword) {
+        this.truststorePassword = truststorePassword;
+    }
+
+    public String getTruststoreType() {
+        return truststoreType;
+    }
+
+    public void setTruststoreType(String truststoreType) {
+        this.truststoreType = truststoreType;
+    }
+
     @Override
     public String toString() {
         return "Configuration{" +
                 "host='" + host + '\'' +
                 ", qmanager='" + qmanager + '\'' +
+                ", jolokiaUrl='" + jolokiaUrl + '\'' +
                 '}';
     }
 }

@@ -1,12 +1,17 @@
 qc:
+  active-qmanager: localQM
+  ui:
+    font-size: 12
+    window:
+      columns: 100
+      rows: 30
   ssl:
     keystore:
-      location: "file:/Users/malen501/Development/certs/esbtest.vgregion.se-keystore.p12"
-      password: "KEYSTORE_PASSWORD"
+      password: "password"
       type: "PKCS12"
     truststore:
-      location: "/Users/malen501/Development/certs/truststore.jks"
-      password: "pasword"
+      location: "file:truststore.jks"
+      password: "password"
       type: "JKS"
   qmanagers:
     - name: localQM
@@ -14,10 +19,10 @@ qc:
       username: admin
       password: admin
     - name: broker-intern1-test
-      url: https://broker-intern1-test.vgregion.se:8162/api/jolokia/
+      url: https://broker-1.mydomain.se:8161/api/jolokia/
       username: admin
       password: admin
     - name: broker-intern2-test
-      url: https://broker-intern2-test.vgregion.se:8162/api/jolokia/
+      url: https://broker-2.mydomain.se:8161/api/jolokia/
       username: admin
       password: admin

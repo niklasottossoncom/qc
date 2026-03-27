@@ -4,8 +4,10 @@ import com.googlecode.lanterna.gui2.Label;
 import com.googlecode.lanterna.gui2.Panel;
 import com.googlecode.lanterna.gui2.Window;
 import com.googlecode.lanterna.terminal.swing.AWTTerminalFontConfiguration;
+import com.niklasottosson.QueueCommander.model.ApplicationSettings;
 import com.niklasottosson.QueueCommander.model.Configuration;
 import com.niklasottosson.QueueCommander.model.Queue;
+import com.niklasottosson.QueueCommander.model.QueueLoadResult;
 import com.niklasottosson.QueueCommander.model.QueueMessage;
 import com.googlecode.lanterna.TerminalSize;
 import com.googlecode.lanterna.gui2.*;
@@ -19,6 +21,7 @@ import com.niklasottosson.QueueCommander.view.MainPanel;
 import org.apache.commons.lang3.StringUtils;
 
 import java.awt.*;
+import java.util.ArrayList;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
@@ -44,25 +47,29 @@ public class QC {
     private static int columns;
     private static ActionListBox aBbox;
     private static ActionListBox rightABbox;
+    private static ComboBox<String> qmanagerSelector;
     private static Label label;
-    private static Label queueManagerLabel;
+    private static Label statusLabel;
     private static ActiveMQ queueManager;
+    private static ApplicationSettings settings;
+    private static Configuration currentConfiguration;
+    private static boolean suppressQmanagerSelectionEvent;
 
     public static <leftQueueManagerLabel> void main(String[] args) throws IOException {
-        //Configuration configuration = new Configuration("localhost", 1414, "QM1", "DEV.ADMIN.SVRCONN", "admin", "passw0rd");
-        Configuration configuration = new Configuration("192.168.0.105", 1414, "QM1", "DEV.ADMIN.SVRCONN", "admin", "passw0rd");
+        settings = ConfigurationLoader.load();
+        currentConfiguration = settings.getActiveConfiguration();
 
-        queueManager = new ActiveMQ(configuration);
+        queueManager = new ActiveMQ(currentConfiguration);
 
         // Setup terminal and screen layers
         try {
             DefaultTerminalFactory factory = new DefaultTerminalFactory();
             factory.setTerminalEmulatorFontConfiguration(
                 AWTTerminalFontConfiguration.newInstance(
-                    new Font("Monospaced", Font.PLAIN, 12) // Doed not work in IntelliJ (depends on the terminal app used)
+                    new Font("Monospaced", Font.PLAIN, settings.getFontSize())
                 )
             );
-            //factory.setInitialTerminalSize(new TerminalSize(120, 40)); // columns x rows
+            factory.setInitialTerminalSize(new TerminalSize(settings.getWindowColumns(), settings.getWindowRows()));
 
             terminal = factory.createTerminal();
             // Create screen
@@ -88,9 +95,10 @@ public class QC {
             // Setup left panel
             queuePanel = new Panel();
             queuePanel.setPreferredSize(new TerminalSize(columns - 8, rows - 13)); // full width, fill above legend
-            queueManagerLabel = new Label("Queue manager: " + configuration.getQmanager());
+            queuePanel.addComponent(createQmanagerSelectorPanel());
+            statusLabel = new Label("Status: Ready");
             label = new Label(getLabel(0));
-            queuePanel.addComponent(queueManagerLabel);
+            queuePanel.addComponent(statusLabel);
             queuePanel.addComponent(label);
             queuePanel.addComponent(aBbox);
 
@@ -98,7 +106,7 @@ public class QC {
 
             // Add legend
             Panel legend = new Panel();
-            Label keysLabel = new Label("Q = Queue manager dialog  R = refresh table  ESC = quit program");
+            Label keysLabel = new Label("Enter = open row  Q = qmanager dialog  R = refresh table  ESC = close window or quit program");
             legend.addComponent(keysLabel);
             mainPanel.addComponent(legend.withBorder(Borders.singleLine("Legend")));
 
@@ -124,10 +132,11 @@ public class QC {
                 }
                 if(key.getCharacter() == Character.valueOf('r') || key.getCharacter() == Character.valueOf('R')) {
                     System.out.println("Update");
-                    update();
+                    update(false);
                 }
                 if(key.getCharacter() == Character.valueOf('q') || key.getCharacter() == Character.valueOf('Q')) {
-                    System.out.println("Qmanager");
+                    openQmanagerSelectionDialog();
+                    return true;
                 }
 
                 return false;
@@ -135,6 +144,7 @@ public class QC {
             });
 
             // Add window to gui and wait
+            update(false);
             gui.addWindowAndWait(window);
 
 
@@ -156,6 +166,10 @@ public class QC {
     }
 
     public static void update() {
+        update(false);
+    }
+
+    public static void update(boolean showErrorDialog) {
         if(queueManager.connect()){
             //System.out.println("Everything is ok");
         }
@@ -163,7 +177,8 @@ public class QC {
             //System.out.println("Everything is bad");
         }
 
-        List<Queue> queues = queueManager.getQueueList();
+        QueueLoadResult loadResult = queueManager.getQueueListResult();
+        List<Queue> queues = loadResult.getQueues();
 
         System.out.println("Number of queues found: " + queues.size());
 
@@ -175,9 +190,21 @@ public class QC {
         int maxLength = getLongestQueueName(queues);
 
         label.setText(getLabel(maxLength));
+        statusLabel.setText("Status: " + loadResult.getMessage());
 
-        for(Queue queue: queues){
-            aBbox.addItem(queue.getActionBoxLabel(maxLength), () -> openQueueMessagesView(queue));
+        if (loadResult.isSuccess()) {
+            for(Queue queue: queues){
+                aBbox.addItem(queue.getActionBoxLabel(maxLength), () -> openQueueMessagesView(queue));
+            }
+            if (queues.isEmpty()) {
+                aBbox.addItem("No queues found", null);
+            }
+        }
+        else {
+            aBbox.addItem("Queue load failed", null);
+            if (showErrorDialog) {
+                openInfoDialog("Queue Manager Error", loadResult.getMessage());
+            }
         }
 
         if(queueManager.disconnect()){
@@ -212,6 +239,109 @@ public class QC {
         label += "    Depth";
 
         return label;
+    }
+
+    private static Panel createQmanagerSelectorPanel() {
+        Panel selectorPanel = new Panel(new LinearLayout(Direction.HORIZONTAL));
+        selectorPanel.addComponent(new Label("Queue manager: "));
+
+        List<String> qmanagerNames = new ArrayList<>();
+        for (Configuration configuration : settings.getQmanagers()) {
+            qmanagerNames.add(configuration.getQmanager());
+        }
+
+        qmanagerSelector = new ComboBox<>(qmanagerNames);
+        qmanagerSelector.setReadOnly(true);
+        qmanagerSelector.setDropDownNumberOfRows(Math.max(3, Math.min(10, qmanagerNames.size())));
+        qmanagerSelector.addListener((selectedIndex, previousSelection) -> {
+            if (suppressQmanagerSelectionEvent) {
+                return;
+            }
+            String selectedName = qmanagerSelector.getSelectedItem();
+            if (selectedName != null) {
+                selectQmanager(selectedName, true);
+            }
+        });
+
+        suppressQmanagerSelectionEvent = true;
+        qmanagerSelector.setSelectedItem(currentConfiguration.getQmanager());
+        suppressQmanagerSelectionEvent = false;
+
+        selectorPanel.addComponent(qmanagerSelector);
+        return selectorPanel;
+    }
+
+    private static void selectQmanager(String qmanagerName) {
+        selectQmanager(qmanagerName, true);
+    }
+
+    private static void selectQmanager(String qmanagerName, boolean showErrorDialog) {
+        Configuration selectedConfiguration = settings.findConfiguration(qmanagerName);
+        if (selectedConfiguration == null) {
+            return;
+        }
+        if (currentConfiguration != null && selectedConfiguration.getQmanager().equals(currentConfiguration.getQmanager())) {
+            return;
+        }
+
+        currentConfiguration = selectedConfiguration;
+        settings.setActiveQmanager(selectedConfiguration.getQmanager());
+        queueManager.setConfig(selectedConfiguration);
+        syncQmanagerSelector(selectedConfiguration.getQmanager());
+        update(showErrorDialog);
+    }
+
+    private static void syncQmanagerSelector(String qmanagerName) {
+        if (qmanagerSelector == null) {
+            return;
+        }
+        suppressQmanagerSelectionEvent = true;
+        qmanagerSelector.setSelectedItem(qmanagerName);
+        suppressQmanagerSelectionEvent = false;
+    }
+
+    private static void openQmanagerSelectionDialog() {
+        BasicWindow qmanagerWindow = new BasicWindow("Select Queue Manager");
+        qmanagerWindow.setHints(Arrays.asList(Window.Hint.MODAL, Window.Hint.CENTERED));
+
+        Panel content = new Panel(new LinearLayout(Direction.VERTICAL));
+        content.addComponent(new Label("Choose queue manager:"));
+
+        int width = Math.max(40, columns - 24);
+        int height = Math.max(6, Math.min(settings.getQmanagers().size() + 2, rows - 12));
+        ActionListBox qmanagerList = new ActionListBox(new TerminalSize(width, height));
+
+        for (Configuration configuration : settings.getQmanagers()) {
+            String prefix = configuration.getQmanager().equals(currentConfiguration.getQmanager()) ? "* " : "  ";
+            String label = prefix + configuration.getQmanager();
+            qmanagerList.addItem(label, () -> {
+                qmanagerWindow.close();
+                selectQmanager(configuration.getQmanager(), true);
+            });
+        }
+
+        content.addComponent(qmanagerList.withBorder(Borders.singleLine("Queue managers")));
+        content.addComponent(new com.googlecode.lanterna.gui2.Button("Close", qmanagerWindow::close));
+        qmanagerWindow.setComponent(content);
+        gui.addWindowAndWait(qmanagerWindow);
+    }
+
+    private static void openInfoDialog(String title, String message) {
+        BasicWindow infoWindow = new BasicWindow(title);
+        infoWindow.setHints(Arrays.asList(Window.Hint.MODAL, Window.Hint.CENTERED));
+
+        Panel content = new Panel(new LinearLayout(Direction.VERTICAL));
+        TextBox messageBox = new TextBox(
+                new TerminalSize(Math.max(60, columns - 24), Math.max(4, Math.min(8, rows - 16))),
+                message,
+                TextBox.Style.MULTI_LINE
+        );
+        messageBox.setReadOnly(true);
+        content.addComponent(messageBox.withBorder(Borders.singleLine("Details")));
+        content.addComponent(new com.googlecode.lanterna.gui2.Button("Close", infoWindow::close));
+
+        infoWindow.setComponent(content);
+        gui.addWindowAndWait(infoWindow);
     }
 
     private static void openQueueMessagesView(Queue queue) {

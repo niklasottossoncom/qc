@@ -2,6 +2,7 @@ package com.niklasottosson.QueueCommander;
 
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -15,6 +16,7 @@ import javax.management.ObjectName;
 
 import com.niklasottosson.QueueCommander.model.Configuration;
 import com.niklasottosson.QueueCommander.model.Queue;
+import com.niklasottosson.QueueCommander.model.QueueLoadResult;
 import com.niklasottosson.QueueCommander.model.QueueMessage;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,14 +27,11 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
 
 public class ActiveMQ {
-    private static final String JOLOKIA_URL = "http://localhost:8161/api/jolokia/";
-    private static final String USERNAME = "admin";
-    private static final String PASSWORD = "admin";
-    private static final String TRUSTSTORE_PATH = "/Users/malen501/Development/certs/truststore.jks";
-    private static final String TRUSTSTORE_PASSWORD = "password";
+    private static final String DEFAULT_JOLOKIA_URL = "http://localhost:8161/api/jolokia/";
 
     private Connection connection;
     private Session session;
+    private Configuration configuration;
 
 
     public ActiveMQ() {
@@ -45,7 +44,7 @@ public class ActiveMQ {
     }
 
     public void setConfig(Configuration conf) {
-
+        this.configuration = conf;
     }
 
     // Not used when ActiveMQ
@@ -60,6 +59,10 @@ public class ActiveMQ {
     }
 
     public List<Queue> getQueueList() {
+        return getQueueListResult().getQueues();
+    }
+
+    public QueueLoadResult getQueueListResult() {
         List<Queue> result = new ArrayList<>();
 
         try {
@@ -68,7 +71,7 @@ public class ActiveMQ {
             // 1) Find all queue MBeans
             String searchPayload =
                     "{\"type\":\"search\",\"mbean\":\"org.apache.activemq:type=Broker,brokerName=*,destinationType=Queue,destinationName=*\"}";
-            String searchBody = postJolokia(client, JOLOKIA_URL, USERNAME, PASSWORD, searchPayload);
+            String searchBody = postJolokia(client, getJolokiaUrl(), getUsername(), getPassword(), searchPayload);
 
             List<String> mbeans = extractMBeansFromSearch(searchBody);
 
@@ -78,7 +81,7 @@ public class ActiveMQ {
             for (String mbean : mbeans) {
                 String readPayload =
                         "{\"type\":\"read\",\"mbean\":\"" + escapeJson(mbean) + "\",\"attribute\":[\"Name\",\"QueueSize\"]}";
-                String readBody = postJolokia(client, JOLOKIA_URL, USERNAME, PASSWORD, readPayload);
+                String readBody = postJolokia(client, getJolokiaUrl(), getUsername(), getPassword(), readPayload);
 
                 String name = extractJsonString(readBody, "Name");
                 long depth = extractJsonLong(readBody, "QueueSize");
@@ -91,11 +94,12 @@ public class ActiveMQ {
                 result.add(new Queue(name != null ? name : mbean, (int) depth));
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            return QueueLoadResult.failure(buildQueueLoadErrorMessage(e));
         }
 
         System.out.println("Found " + result.size() + " queues via Jolokia.");
-        return result;
+        String message = result.isEmpty() ? "Connected, but no queues were returned." : "Connected to " + getDisplayName() + ".";
+        return QueueLoadResult.success(result, message);
     }
 
     public List<String> getQueueMessages(String queueName, int maxMessages) {
@@ -115,7 +119,7 @@ public class ActiveMQ {
 
             String searchPayload =
                     "{\"type\":\"search\",\"mbean\":\"org.apache.activemq:type=Broker,brokerName=*,destinationType=Queue,destinationName=*\"}";
-            String searchBody = postJolokia(client, JOLOKIA_URL, USERNAME, PASSWORD, searchPayload);
+            String searchBody = postJolokia(client, getJolokiaUrl(), getUsername(), getPassword(), searchPayload);
 
             List<String> mbeans = extractMBeansFromSearch(searchBody);
             String queueMBean = findQueueMBean(queueName, mbeans);
@@ -126,7 +130,7 @@ public class ActiveMQ {
 
             String browsePayload =
                     "{\"type\":\"exec\",\"mbean\":\"" + escapeJson(queueMBean) + "\",\"operation\":\"browse()\"}";
-            String browseBody = postJolokia(client, JOLOKIA_URL, USERNAME, PASSWORD, browsePayload);
+            String browseBody = postJolokia(client, getJolokiaUrl(), getUsername(), getPassword(), browsePayload);
 
             List<String> messageObjects = extractJsonObjectsFromValueArray(browseBody);
             int count = Math.min(messageObjects.size(), effectiveMax);
@@ -316,18 +320,22 @@ public class ActiveMQ {
     }
 
     private HttpClient createConfiguredClient() throws Exception {
-        if (TRUSTSTORE_PATH == null || TRUSTSTORE_PATH.trim().isEmpty()) {
+        if (configuration == null || configuration.getTruststoreLocation() == null || configuration.getTruststoreLocation().trim().isEmpty()) {
             return HttpClient.newBuilder().build();
         }
-        return createHttpClientWithTruststore(TRUSTSTORE_PATH, TRUSTSTORE_PASSWORD);
+        return createHttpClientWithTruststore(
+                configuration.getTruststoreLocation(),
+                configuration.getTruststorePassword(),
+                configuration.getTruststoreType()
+        );
     }
 
-    private HttpClient createHttpClientWithTruststore(String truststorePath, String truststorePassword)
+    private HttpClient createHttpClientWithTruststore(String truststorePath, String truststorePassword, String truststoreType)
             throws Exception {
         // Load the truststore
-        KeyStore trustStore = KeyStore.getInstance("JKS");
-        try (FileInputStream fis = new FileInputStream(truststorePath)) {
-            trustStore.load(fis, truststorePassword.toCharArray());
+        KeyStore trustStore = KeyStore.getInstance(hasText(truststoreType) ? truststoreType : "JKS");
+        try (InputStream fis = openLocation(truststorePath)) {
+            trustStore.load(fis, hasText(truststorePassword) ? truststorePassword.toCharArray() : null);
         }
 
         // Create TrustManagerFactory with the truststore
@@ -343,6 +351,45 @@ public class ActiveMQ {
         return HttpClient.newBuilder()
                 .sslContext(sslContext)
                 .build();
+    }
+
+    private String getJolokiaUrl() {
+        return configuration != null && hasText(configuration.getJolokiaUrl())
+                ? configuration.getJolokiaUrl()
+                : DEFAULT_JOLOKIA_URL;
+    }
+
+    private String getUsername() {
+        return configuration != null ? configuration.getUser() : null;
+    }
+
+    private String getPassword() {
+        return configuration != null ? configuration.getPassword() : null;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
+    private InputStream openLocation(String location) throws IOException {
+        if (location.startsWith("file:")) {
+            return URI.create(location).toURL().openStream();
+        }
+        return new FileInputStream(location);
+    }
+
+    private String buildQueueLoadErrorMessage(Exception exception) {
+        String detail = exception.getMessage();
+        if (!hasText(detail)) {
+            detail = exception.getClass().getSimpleName();
+        }
+        return "Unable to reach " + getDisplayName() + " (" + getJolokiaUrl() + "): " + detail;
+    }
+
+    private String getDisplayName() {
+        return configuration != null && hasText(configuration.getQmanager())
+                ? configuration.getQmanager()
+                : "queue manager";
     }
 
 
