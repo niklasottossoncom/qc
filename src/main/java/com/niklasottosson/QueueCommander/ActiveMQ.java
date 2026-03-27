@@ -11,9 +11,11 @@ import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import javax.management.ObjectName;
 
 import com.niklasottosson.QueueCommander.model.Configuration;
 import com.niklasottosson.QueueCommander.model.Queue;
+import com.niklasottosson.QueueCommander.model.QueueMessage;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -23,6 +25,12 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
 
 public class ActiveMQ {
+    private static final String JOLOKIA_URL = "http://localhost:8161/api/jolokia/";
+    private static final String USERNAME = "admin";
+    private static final String PASSWORD = "admin";
+    private static final String TRUSTSTORE_PATH = "/Users/malen501/Development/certs/truststore.jks";
+    private static final String TRUSTSTORE_PASSWORD = "password";
+
     private Connection connection;
     private Session session;
 
@@ -40,56 +48,27 @@ public class ActiveMQ {
 
     }
 
+    // Not used when ActiveMQ
     public boolean connect() {
-        // Create a ConnectionFactory
-        //ActiveMQConnectionFactory connectionFactory = new ActiveMQConnectionFactory("tcp://localhost:61616");
-/*
-        try {
 
-            // Create a Connection
-            //connection = connectionFactory.createConnection();
-            //connection.start();
-
-            // Create a Session
-            //session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
-        } catch (JMSException e) {
-            e.printStackTrace();
-        }
-*/
         return true;
     }
 
+    // Not used when ActiveMQ
     public boolean disconnect() {
-        /*
-        try {
-            session.close();
-            connection.close();
-        } catch (JMSException e) {
-            e.printStackTrace();
-            return false;
-        }
-*/
         return true;
     }
 
     public List<Queue> getQueueList() {
         List<Queue> result = new ArrayList<>();
 
-        // Adjust as needed or wire from Configuration/setConfig
-        final String jolokiaUrl = "https://localhost:8161/api/jolokia/";
-        final String username = "admin";
-        final String password = "admin";
-
         try {
-            HttpClient client = createHttpClientWithTruststore(
-                    "/Users/malen501/Development/certs/truststore.jks",
-                    "password"
-            );
+            HttpClient client = createConfiguredClient();
 
             // 1) Find all queue MBeans
             String searchPayload =
                     "{\"type\":\"search\",\"mbean\":\"org.apache.activemq:type=Broker,brokerName=*,destinationType=Queue,destinationName=*\"}";
-            String searchBody = postJolokia(client, jolokiaUrl, username, password, searchPayload);
+            String searchBody = postJolokia(client, JOLOKIA_URL, USERNAME, PASSWORD, searchPayload);
 
             List<String> mbeans = extractMBeansFromSearch(searchBody);
 
@@ -99,7 +78,7 @@ public class ActiveMQ {
             for (String mbean : mbeans) {
                 String readPayload =
                         "{\"type\":\"read\",\"mbean\":\"" + escapeJson(mbean) + "\",\"attribute\":[\"Name\",\"QueueSize\"]}";
-                String readBody = postJolokia(client, jolokiaUrl, username, password, readPayload);
+                String readBody = postJolokia(client, JOLOKIA_URL, USERNAME, PASSWORD, readPayload);
 
                 String name = extractJsonString(readBody, "Name");
                 long depth = extractJsonLong(readBody, "QueueSize");
@@ -109,7 +88,7 @@ public class ActiveMQ {
                     name = extractDestinationNameFromMBean(mbean);
                 }
 
-                result.add(new Queue(name != null ? name : mbean, (int) depth, "N/A", "N/A"));
+                result.add(new Queue(name != null ? name : mbean, (int) depth));
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -117,6 +96,57 @@ public class ActiveMQ {
 
         System.out.println("Found " + result.size() + " queues via Jolokia.");
         return result;
+    }
+
+    public List<String> getQueueMessages(String queueName, int maxMessages) {
+        List<String> messages = new ArrayList<>();
+        for (QueueMessage message : getQueueMessageDetails(queueName, maxMessages)) {
+            messages.add(message.getPreview());
+        }
+        return messages;
+    }
+
+    public List<QueueMessage> getQueueMessageDetails(String queueName, int maxMessages) {
+        List<QueueMessage> messages = new ArrayList<>();
+        int effectiveMax = Math.max(1, maxMessages);
+
+        try {
+            HttpClient client = createConfiguredClient();
+
+            String searchPayload =
+                    "{\"type\":\"search\",\"mbean\":\"org.apache.activemq:type=Broker,brokerName=*,destinationType=Queue,destinationName=*\"}";
+            String searchBody = postJolokia(client, JOLOKIA_URL, USERNAME, PASSWORD, searchPayload);
+
+            List<String> mbeans = extractMBeansFromSearch(searchBody);
+            String queueMBean = findQueueMBean(queueName, mbeans);
+            if (queueMBean == null) {
+                messages.add(QueueMessage.info("Queue not found: " + queueName));
+                return messages;
+            }
+
+            String browsePayload =
+                    "{\"type\":\"exec\",\"mbean\":\"" + escapeJson(queueMBean) + "\",\"operation\":\"browse()\"}";
+            String browseBody = postJolokia(client, JOLOKIA_URL, USERNAME, PASSWORD, browsePayload);
+
+            List<String> messageObjects = extractJsonObjectsFromValueArray(browseBody);
+            int count = Math.min(messageObjects.size(), effectiveMax);
+
+            for (int i = 0; i < count; i++) {
+                String object = messageObjects.get(i);
+                String id = safeValue(extractJsonString(object, "JMSMessageID"), "<no-id>");
+                String content = extractMessageBody(object);
+                String preview = String.format("%03d  %s  %s", i + 1, id, truncate(content, 120));
+                messages.add(new QueueMessage(id, content, preview, true));
+            }
+
+            if (messages.isEmpty()) {
+                messages.add(QueueMessage.info("No messages in queue."));
+            }
+        } catch (Exception e) {
+            messages.add(QueueMessage.info("Failed to read messages: " + e.getMessage()));
+        }
+
+        return messages;
     }
 
     private String postJolokia(HttpClient client, String url, String user, String pass, String payload)
@@ -170,8 +200,102 @@ public class ActiveMQ {
     }
 
     private String extractDestinationNameFromMBean(String mbean) {
-        Matcher m = Pattern.compile("destinationName=([^,]+)$").matcher(mbean);
-        return m.find() ? m.group(1) : null;
+        try {
+            ObjectName objectName = new ObjectName(mbean);
+            return objectName.getKeyProperty("destinationName");
+        } catch (Exception ignored) {
+            Matcher m = Pattern.compile("destinationName=([^,]+)").matcher(mbean);
+            return m.find() ? m.group(1) : null;
+        }
+    }
+
+    private String findQueueMBean(String queueName, List<String> mbeans) {
+        String expectedName = normalizeQueueName(queueName);
+        for (String mbean : mbeans) {
+            String destinationName = normalizeQueueName(extractDestinationNameFromMBean(mbean));
+            if (expectedName.equals(destinationName)) {
+                return mbean;
+            }
+        }
+        return null;
+    }
+
+    private String normalizeQueueName(String name) {
+        if (name == null) {
+            return "";
+        }
+        String normalized = name.trim();
+        if (normalized.length() >= 2 && normalized.startsWith("\"") && normalized.endsWith("\"")) {
+            normalized = normalized.substring(1, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    private List<String> extractJsonObjectsFromValueArray(String json) {
+        List<String> out = new ArrayList<>();
+        Matcher valueMatcher = Pattern.compile("\\\"value\\\"\\s*:\\s*\\[(.*)]", Pattern.DOTALL).matcher(json);
+        if (!valueMatcher.find()) {
+            return out;
+        }
+
+        String arrayBody = valueMatcher.group(1);
+        int depth = 0;
+        int start = -1;
+        boolean inString = false;
+        boolean escape = false;
+
+        for (int i = 0; i < arrayBody.length(); i++) {
+            char c = arrayBody.charAt(i);
+
+            if (inString) {
+                if (escape) {
+                    escape = false;
+                } else if (c == '\\') {
+                    escape = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (c == '"') {
+                inString = true;
+                continue;
+            }
+
+            if (c == '{') {
+                if (depth == 0) {
+                    start = i;
+                }
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0 && start >= 0) {
+                    out.add(arrayBody.substring(start, i + 1));
+                    start = -1;
+                }
+            }
+        }
+
+        return out;
+    }
+
+    private String extractMessageBody(String jsonObject) {
+        String text = extractJsonString(jsonObject, "Text");
+        if (text != null) {
+            return text;
+        }
+
+        String body = extractJsonString(jsonObject, "Body");
+        if (body != null) {
+            return body;
+        }
+
+        return "<non-text message>";
+    }
+
+    private String safeValue(String value, String fallback) {
+        return value == null || value.trim().isEmpty() ? fallback : value;
     }
 
     private String escapeJson(String s) {
@@ -182,6 +306,20 @@ public class ActiveMQ {
     private String unescapeJson(String s) {
         if (s == null) return null;
         return s.replace("\\\"", "\"").replace("\\\\", "\\");
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, Math.max(0, maxLength - 3)) + "...";
+    }
+
+    private HttpClient createConfiguredClient() throws Exception {
+        if (TRUSTSTORE_PATH == null || TRUSTSTORE_PATH.trim().isEmpty()) {
+            return HttpClient.newBuilder().build();
+        }
+        return createHttpClientWithTruststore(TRUSTSTORE_PATH, TRUSTSTORE_PASSWORD);
     }
 
     private HttpClient createHttpClientWithTruststore(String truststorePath, String truststorePassword)

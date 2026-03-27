@@ -12,6 +12,11 @@ public class Queue {
     private String lastPut;
     private String lastGet;
 
+    public Queue(String name, int depth) {
+        this.name = name;
+        this.depth = depth;
+    }
+
     public Queue(String name, int depth, String lastPut, String lastGet){
         this.name = name;
         this.depth = depth;
@@ -57,6 +62,6 @@ public class Queue {
     }
 
     public String getActionBoxLabel(int maxLength){
-        return StringUtils.rightPad(this.getName(), maxLength) + " " + StringUtils.leftPad(String.valueOf(this.getDepth()),6) + "   " + this.getLastGet() + "   " + this.getLastPut() + "  ";
+        return StringUtils.rightPad(this.getName(), maxLength) + " " + StringUtils.leftPad(String.valueOf(this.getDepth()),6);
     }
 }

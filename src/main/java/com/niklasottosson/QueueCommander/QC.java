@@ -6,6 +6,7 @@ import com.googlecode.lanterna.gui2.Window;
 import com.googlecode.lanterna.terminal.swing.AWTTerminalFontConfiguration;
 import com.niklasottosson.QueueCommander.model.Configuration;
 import com.niklasottosson.QueueCommander.model.Queue;
+import com.niklasottosson.QueueCommander.model.QueueMessage;
 import com.googlecode.lanterna.TerminalSize;
 import com.googlecode.lanterna.gui2.*;
 import com.googlecode.lanterna.input.KeyStroke;
@@ -19,6 +20,7 @@ import org.apache.commons.lang3.StringUtils;
 
 import java.awt.*;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 import static java.lang.Thread.sleep;
@@ -31,6 +33,8 @@ import static java.lang.Thread.sleep;
  *
  */
 public class QC {
+    private static final int MESSAGE_PREVIEW_LIMIT = 200;
+
     private static Terminal terminal;
     private static Screen screen;
     private static Window window;
@@ -106,6 +110,11 @@ public class QC {
                 @Override
                 public boolean onUnhandledKeyStroke(TextGUI textGUI, KeyStroke key) {
                 if(key.getKeyType() == KeyType.Escape) {
+                    Window activeWindow = gui.getActiveWindow();
+                    if (activeWindow != null && activeWindow != window) {
+                        activeWindow.close();
+                        return true;
+                    }
                     try {
                         screen.stopScreen();
                     } catch (IOException e) {
@@ -168,7 +177,7 @@ public class QC {
         label.setText(getLabel(maxLength));
 
         for(Queue queue: queues){
-            aBbox.addItem(queue.getActionBoxLabel(maxLength), null);
+            aBbox.addItem(queue.getActionBoxLabel(maxLength), () -> openQueueMessagesView(queue));
         }
 
         if(queueManager.disconnect()){
@@ -196,13 +205,63 @@ public class QC {
 
         // At init we do not know the max length
         if(maxLength == 0){
-            maxLength = 26;
+            maxLength = 30;
         }
 
         label = StringUtils.rightPad(label, maxLength);
-        label += " Depth";
+        label += "    Depth";
 
         return label;
+    }
+
+    private static void openQueueMessagesView(Queue queue) {
+        BasicWindow messagesWindow = new BasicWindow("Messages: " + queue.getName());
+        messagesWindow.setHints(Arrays.asList(Window.Hint.MODAL, Window.Hint.CENTERED));
+
+        Panel content = new Panel(new LinearLayout(Direction.VERTICAL));
+        content.addComponent(new Label("Queue: " + queue.getName()));
+        content.addComponent(new EmptySpace(new TerminalSize(1, 1)));
+
+        int messageListWidth = Math.max(60, columns - 16);
+        int messageListHeight = Math.max(12, rows - 12);
+        ActionListBox messageList = new ActionListBox(new TerminalSize(messageListWidth, messageListHeight));
+
+        List<QueueMessage> messages = queueManager.getQueueMessageDetails(queue.getName(), MESSAGE_PREVIEW_LIMIT);
+        for (QueueMessage message : messages) {
+            if (message.isOpenable()) {
+                messageList.addItem(message.getPreview(), () -> openMessageDetailView(queue, message));
+            } else {
+                messageList.addItem(message.getPreview(), null);
+            }
+        }
+
+        content.addComponent(messageList.withBorder(Borders.singleLine("Messages")));
+        content.addComponent(new com.googlecode.lanterna.gui2.Button("Close", messagesWindow::close));
+
+        messagesWindow.setComponent(content);
+        gui.addWindowAndWait(messagesWindow);
+    }
+
+    private static void openMessageDetailView(Queue queue, QueueMessage message) {
+        BasicWindow messageWindow = new BasicWindow("Message Details");
+        messageWindow.setHints(Arrays.asList(Window.Hint.MODAL, Window.Hint.CENTERED));
+
+        Panel content = new Panel(new LinearLayout(Direction.VERTICAL));
+        content.addComponent(new Label("Queue: " + queue.getName()));
+        content.addComponent(new Label("Message ID:"));
+
+        TextBox idBox = new TextBox(new TerminalSize(Math.max(60, columns - 20), 3), message.getMessageId(), TextBox.Style.MULTI_LINE);
+        idBox.setReadOnly(true);
+        content.addComponent(idBox.withBorder(Borders.singleLine()));
+
+        content.addComponent(new Label("Body:"));
+        TextBox bodyBox = new TextBox(new TerminalSize(Math.max(60, columns - 20), Math.max(10, rows - 16)), message.getBody(), TextBox.Style.MULTI_LINE);
+        bodyBox.setReadOnly(true);
+        content.addComponent(bodyBox.withBorder(Borders.singleLine()));
+
+        content.addComponent(new com.googlecode.lanterna.gui2.Button("Close", messageWindow::close));
+        messageWindow.setComponent(content);
+        gui.addWindowAndWait(messageWindow);
     }
 
 }
