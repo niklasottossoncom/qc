@@ -1,423 +1,329 @@
 package com.niklasottosson.QueueCommander;
 
-import com.googlecode.lanterna.gui2.Label;
-import com.googlecode.lanterna.gui2.Panel;
-import com.googlecode.lanterna.gui2.Window;
-import com.googlecode.lanterna.terminal.swing.AWTTerminalFontConfiguration;
 import com.niklasottosson.QueueCommander.model.ApplicationSettings;
 import com.niklasottosson.QueueCommander.model.Configuration;
 import com.niklasottosson.QueueCommander.model.Queue;
 import com.niklasottosson.QueueCommander.model.QueueLoadResult;
 import com.niklasottosson.QueueCommander.model.QueueMessage;
-import com.googlecode.lanterna.TerminalSize;
-import com.googlecode.lanterna.gui2.*;
-import com.googlecode.lanterna.input.KeyStroke;
-import com.googlecode.lanterna.input.KeyType;
-import com.googlecode.lanterna.screen.Screen;
-import com.googlecode.lanterna.screen.TerminalScreen;
-import com.googlecode.lanterna.terminal.DefaultTerminalFactory;
-import com.googlecode.lanterna.terminal.Terminal;
-import com.niklasottosson.QueueCommander.view.MainPanel;
+import dev.tamboui.toolkit.app.ToolkitApp;
+import dev.tamboui.toolkit.element.Element;
+import dev.tamboui.toolkit.elements.ListElement;
+import dev.tamboui.toolkit.event.EventResult;
 import org.apache.commons.lang3.StringUtils;
 
-import java.awt.*;
-import java.util.ArrayList;
 import java.io.IOException;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 
-import static java.lang.Thread.sleep;
+import static dev.tamboui.toolkit.Toolkit.*;
 
 /**
- * Created by malen on 2019-02-18.
+ * Queue Commander — ActiveMQ queue and message viewer.
  *
- * Docs
- * https://github.com/mabe02/lanterna/blob/master/docs/contents.md
+ * Built with TamboUI for the terminal UI.
  *
+ * Key bindings (main queue list):
+ *   ↑ / ↓       — navigate queues
+ *   Enter        — open message list for selected queue
+ *   R            — refresh queue list
+ *   Q            — select queue manager
+ *   Esc / q      — quit
  */
-public class QC {
+public class QC extends ToolkitApp {
+
     private static final int MESSAGE_PREVIEW_LIMIT = 200;
 
-    private static Terminal terminal;
-    private static Screen screen;
-    private static Window window;
-    private static WindowBasedTextGUI gui;
-    private static Panel queuePanel;
-    private static int rows;
-    private static int columns;
-    private static ActionListBox aBbox;
-    private static ActionListBox rightABbox;
-    private static ComboBox<String> qmanagerSelector;
-    private static Label label;
-    private static Label statusLabel;
-    private static ActiveMQ queueManager;
-    private static ApplicationSettings settings;
-    private static Configuration currentConfiguration;
-    private static boolean suppressQmanagerSelectionEvent;
+    // ── Application backend ──────────────────────────────────────────────────
+    private ApplicationSettings settings;
+    private Configuration currentConfiguration;
+    private ActiveMQ queueManager;
 
-    public static <leftQueueManagerLabel> void main(String[] args) throws IOException {
-        settings = ConfigurationLoader.load();
-        currentConfiguration = settings.getActiveConfiguration();
+    // ── UI state ─────────────────────────────────────────────────────────────
+    private List<Queue> queues = new ArrayList<>();
+    private List<QueueMessage> messages = new ArrayList<>();
+    private String statusMessage = "Status: Ready";
+    private Queue viewedQueue = null;
+    private QueueMessage viewedMessage = null;
 
-        queueManager = new ActiveMQ(currentConfiguration);
+    // ── View state ───────────────────────────────────────────────────────────
+    private enum View { QUEUE_LIST, MESSAGE_LIST, MESSAGE_DETAIL, QMANAGER_DIALOG }
+    private View currentView = View.QUEUE_LIST;
+    private View previousView = null;
 
-        // Setup terminal and screen layers
+    // ── Persistent list elements (preserve scroll/selection state) ───────────
+    private final ListElement<String> queueListEl = new ListElement<String>()
+            .id("queueList").focusable().autoScroll();
+
+    private final ListElement<String> messageListEl = new ListElement<String>()
+            .id("messageList").focusable().autoScroll();
+
+    private final ListElement<String> qmanagerListEl = new ListElement<String>()
+            .id("qmanagerList").focusable().autoScroll();
+
+    private final ListElement<String> messageDetailEl = new ListElement<String>()
+            .id("messageDetail").focusable().autoScroll();
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────
+
+    @Override
+    protected void onStart() {
         try {
-            DefaultTerminalFactory factory = new DefaultTerminalFactory();
-            factory.setTerminalEmulatorFontConfiguration(
-                AWTTerminalFontConfiguration.newInstance(
-                    new Font("Monospaced", Font.PLAIN, settings.getFontSize())
-                )
-            );
-            factory.setInitialTerminalSize(new TerminalSize(settings.getWindowColumns(), settings.getWindowRows()));
-
-            terminal = factory.createTerminal();
-            // Create screen
-            screen = new TerminalScreen(terminal);
-            gui = new MultiWindowTextGUI(screen);
-
-            aBbox = new ActionListBox();
-            aBbox.addItem("--- Queues ---", null);
-
-            screen.startScreen();
-            screen.refresh();
-
-            // Get current size
-            rows = screen.getTerminalSize().getRows();
-            columns = screen.getTerminalSize().getColumns();
-
-            // Create window to hold components
-            window = new BasicWindow();
-
-            // Setup main panel
-            Panel mainPanel = new MainPanel().init(columns, rows);
-
-            // Setup left panel
-            queuePanel = new Panel();
-            queuePanel.setPreferredSize(new TerminalSize(columns - 8, rows - 13)); // full width, fill above legend
-            queuePanel.addComponent(createQmanagerSelectorPanel());
-            statusLabel = new Label("Status: Ready");
-            label = new Label(getLabel(0));
-            queuePanel.addComponent(statusLabel);
-            queuePanel.addComponent(label);
-            queuePanel.addComponent(aBbox);
-
-            mainPanel.addComponent(queuePanel.withBorder(Borders.singleLine()));
-
-            // Add legend
-            Panel legend = new Panel();
-            Label keysLabel = new Label("Enter = open row  Q = qmanager dialog  R = refresh table  ESC = close window or quit program");
-            legend.addComponent(keysLabel);
-            mainPanel.addComponent(legend.withBorder(Borders.singleLine("Legend")));
-
-            // Add everything to window
-            window.setComponent(mainPanel.withBorder(Borders.singleLine("Queue Commander")));
-
-            // Add gui listener
-            gui.addListener(new TextGUI.Listener() {
-                @Override
-                public boolean onUnhandledKeyStroke(TextGUI textGUI, KeyStroke key) {
-                if(key.getKeyType() == KeyType.Escape) {
-                    Window activeWindow = gui.getActiveWindow();
-                    if (activeWindow != null && activeWindow != window) {
-                        activeWindow.close();
-                        return true;
-                    }
-                    try {
-                        screen.stopScreen();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                    return true;
-                }
-                if(key.getCharacter() == Character.valueOf('r') || key.getCharacter() == Character.valueOf('R')) {
-                    System.out.println("Update");
-                    update(false);
-                }
-                if(key.getCharacter() == Character.valueOf('q') || key.getCharacter() == Character.valueOf('Q')) {
-                    openQmanagerSelectionDialog();
-                    return true;
-                }
-
-                return false;
-                }
-            });
-
-            // Add window to gui and wait
-            update(false);
-            gui.addWindowAndWait(window);
-
-
-
+            settings = ConfigurationLoader.load();
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new RuntimeException("Failed to load configuration: " + e.getMessage(), e);
         }
-
-
-        try {
-            sleep(5000);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-
-        //gui.shutdown();
-        screen.stopScreen();
-
+        currentConfiguration = settings.getActiveConfiguration();
+        queueManager = new ActiveMQ(currentConfiguration);
+        refresh();
     }
 
-    public static void update() {
-        update(false);
-    }
+    // ── Render ───────────────────────────────────────────────────────────────
 
-    public static void update(boolean showErrorDialog) {
-        if(queueManager.connect()){
-            //System.out.println("Everything is ok");
+    @Override
+    protected Element render() {
+
+        // Synchronise focus when the active view changes.
+        if (currentView != previousView) {
+            previousView = currentView;
+            String focusId = switch (currentView) {
+                case QUEUE_LIST      -> "queueList";
+                case MESSAGE_LIST    -> "messageList";
+                case QMANAGER_DIALOG -> "qmanagerList";
+                case MESSAGE_DETAIL  -> "messageDetail";
+            };
+            runner().focusManager().setFocus(focusId);
         }
-        else {
-            //System.out.println("Everything is bad");
-        }
 
-        QueueLoadResult loadResult = queueManager.getQueueListResult();
-        List<Queue> queues = loadResult.getQueues();
+        // ── Queue-manager selector list ───────────────────────────────────
+        List<Configuration> configs = settings.getQmanagers();
+        qmanagerListEl.items(buildQmanagerItems(configs));
+        qmanagerListEl.onKeyEvent(event -> {
+            if (event.isCancel()) {
+                currentView = View.QUEUE_LIST;
+                return EventResult.HANDLED;
+            }
+            if (event.isSelect() || event.isConfirm()) {
+                int idx = qmanagerListEl.selected();
+                if (idx >= 0 && idx < configs.size()) {
+                    Configuration selected = configs.get(idx);
+                    if (!selected.getQmanager().equals(currentConfiguration.getQmanager())) {
+                        currentConfiguration = selected;
+                        settings.setActiveQmanager(selected.getQmanager());
+                        queueManager.setConfig(selected);
+                        refresh();
+                    }
+                }
+                currentView = View.QUEUE_LIST;
+                return EventResult.HANDLED;
+            }
+            return EventResult.UNHANDLED;
+        });
 
-        System.out.println("Number of queues found: " + queues.size());
-
-
-        // Remove old items
-        aBbox.clearItems();
-        aBbox.clearItems();
-
+        // ── Queue list ────────────────────────────────────────────────────
         int maxLength = getLongestQueueName(queues);
-
-        label.setText(getLabel(maxLength));
-        statusLabel.setText("Status: " + loadResult.getMessage());
-
-        if (loadResult.isSuccess()) {
-            for(Queue queue: queues){
-                aBbox.addItem(queue.getActionBoxLabel(maxLength), () -> openQueueMessagesView(queue));
+        queueListEl.items(buildQueueItems(maxLength));
+        queueListEl.onKeyEvent(event -> {
+            if (event.isCharIgnoreCase('r')) {
+                refresh();
+                return EventResult.HANDLED;
             }
-            if (queues.isEmpty()) {
-                aBbox.addItem("No queues found", null);
+            if (event.isCharIgnoreCase('q')) {
+                currentView = View.QMANAGER_DIALOG;
+                return EventResult.HANDLED;
             }
+            if (event.isCancel()) {
+                quit();
+                return EventResult.HANDLED;
+            }
+            if (event.isSelect() || event.isConfirm()) {
+                int idx = queueListEl.selected();
+                if (idx >= 0 && idx < queues.size()) {
+                    viewedQueue = queues.get(idx);
+                    loadMessages(viewedQueue.getName());
+                    currentView = View.MESSAGE_LIST;
+                }
+                return EventResult.HANDLED;
+            }
+            return EventResult.UNHANDLED;
+        });
+
+        // ── Message list ──────────────────────────────────────────────────
+        messageListEl.items(buildMessageItems());
+        messageListEl.onKeyEvent(event -> {
+            if (event.isCancel()) {
+                currentView = View.QUEUE_LIST;
+                return EventResult.HANDLED;
+            }
+            if (event.isSelect() || event.isConfirm()) {
+                int idx = messageListEl.selected();
+                if (idx >= 0 && idx < messages.size()) {
+                    QueueMessage msg = messages.get(idx);
+                    if (msg.isOpenable()) {
+                        viewedMessage = msg;
+                        currentView = View.MESSAGE_DETAIL;
+                    }
+                }
+                return EventResult.HANDLED;
+            }
+            return EventResult.UNHANDLED;
+        });
+
+        // ── Message detail ────────────────────────────────────────────────
+        if (viewedMessage != null) {
+            messageDetailEl.items(buildMessageDetailLines(viewedMessage));
         }
-        else {
-            aBbox.addItem("Queue load failed", null);
-            if (showErrorDialog) {
-                openInfoDialog("Queue Manager Error", loadResult.getMessage());
+        messageDetailEl.onKeyEvent(event -> {
+            if (event.isCancel()) {
+                currentView = View.MESSAGE_LIST;
+                return EventResult.HANDLED;
             }
+            return EventResult.UNHANDLED;
+        });
+
+        // ── Main view ─────────────────────────────────────────────────────
+        String headerLabel = getLabel(maxLength);
+
+        Element mainView = panel("Queue Commander",
+            column(
+                row(
+                    text("Queue manager: "),
+                    text(currentConfiguration.getQmanager()).bold().cyan(),
+                    spacer(),
+                    text("[Q] change  [R] refresh  [Esc] quit")
+                ),
+                text(statusMessage),
+                text(headerLabel).bold(),
+                queueListEl,
+                panel("Legend",
+                    text("↑↓ Navigate   Enter = Open queue   Q = Change queue manager   R = Refresh   Esc = Quit")
+                )
+            )
+        ).rounded();
+
+        // ── Overlaid dialogs ──────────────────────────────────────────────
+        if (currentView == View.QMANAGER_DIALOG) {
+            return stack(
+                mainView,
+                dialog("Select Queue Manager",
+                    column(
+                        text("Choose a queue manager:"),
+                        qmanagerListEl,
+                        text("[Enter] Select   [Esc] Cancel")
+                    )
+                ).rounded()
+            );
         }
 
-        if(queueManager.disconnect()){
-            //System.out.println("Disconnect successfull");
-        }
-        else {
-            //System.out.println("Disconnect unsuccessfull");
+        if (currentView == View.MESSAGE_LIST) {
+            return stack(
+                mainView,
+                dialog("Messages: " + (viewedQueue != null ? viewedQueue.getName() : ""),
+                    column(
+                        messageListEl,
+                        text("[Enter] Open message   [Esc] Back")
+                    )
+                ).rounded()
+            );
         }
 
+        if (currentView == View.MESSAGE_DETAIL) {
+            return stack(
+                mainView,
+                dialog("Message Detail",
+                    column(
+                        messageDetailEl,
+                        text("[↑↓] Scroll   [Esc] Back")
+                    )
+                ).rounded()
+            );
+        }
+
+        return mainView;
     }
 
-    public static int getLongestQueueName(List<Queue> queues){
+    // ── Backend helpers ──────────────────────────────────────────────────────
+
+    private void refresh() {
+        statusMessage = "Status: Loading...";
+        QueueLoadResult result = queueManager.getQueueListResult();
+        queues = new ArrayList<>(result.getQueues());
+        statusMessage = "Status: " + result.getMessage();
+        if (!result.isSuccess()) {
+            queues = new ArrayList<>();
+        }
+    }
+
+    private void loadMessages(String queueName) {
+        messages = queueManager.getQueueMessageDetails(queueName, MESSAGE_PREVIEW_LIMIT);
+    }
+
+    // ── Item builders ────────────────────────────────────────────────────────
+
+    private String[] buildQueueItems(int maxLength) {
+        if (queues.isEmpty()) {
+            return new String[]{"No queues found."};
+        }
+        return queues.stream()
+                .map(q -> q.getActionBoxLabel(maxLength))
+                .toArray(String[]::new);
+    }
+
+    private String[] buildMessageItems() {
+        if (messages.isEmpty()) {
+            return new String[]{"No messages in queue."};
+        }
+        return messages.stream()
+                .map(QueueMessage::getPreview)
+                .toArray(String[]::new);
+    }
+
+    private String[] buildQmanagerItems(List<Configuration> configs) {
+        return configs.stream()
+                .map(c -> (c.getQmanager().equals(currentConfiguration.getQmanager()) ? "* " : "  ")
+                        + c.getQmanager())
+                .toArray(String[]::new);
+    }
+
+    private String[] buildMessageDetailLines(QueueMessage msg) {
+        List<String> lines = new ArrayList<>();
+        lines.add("Queue:      " + (viewedQueue != null ? viewedQueue.getName() : ""));
+        lines.add("Message ID: " + msg.getMessageId());
+        lines.add("");
+        lines.add("─── Body ──────────────────────────────────────────────────────────────");
+        String body = msg.getBody();
+        if (body == null || body.isEmpty()) {
+            lines.add("<empty body>");
+        } else {
+            for (String line : body.split("\n", -1)) {
+                lines.add(line);
+            }
+        }
+        return lines.toArray(new String[0]);
+    }
+
+    // ── Label helpers ────────────────────────────────────────────────────────
+
+    private static int getLongestQueueName(List<Queue> queues) {
         int longest = 0;
-        for(Queue q: queues){
-            if(longest < q.getName().length()){
+        for (Queue q : queues) {
+            if (q.getName().length() > longest) {
                 longest = q.getName().length();
             }
         }
-
         return longest;
     }
 
-    public static String getLabel(int maxLength){
-        String label = "Name";
-
-        // At init we do not know the max length
-        if(maxLength == 0){
+    private static String getLabel(int maxLength) {
+        if (maxLength == 0) {
             maxLength = 30;
         }
-
-        label = StringUtils.rightPad(label, maxLength);
-        label += "    Depth";
-
-        return label;
+        return StringUtils.rightPad("Name", maxLength) + "    Depth";
     }
 
-    private static Panel createQmanagerSelectorPanel() {
-        Panel selectorPanel = new Panel(new LinearLayout(Direction.HORIZONTAL));
-        selectorPanel.addComponent(new Label("Queue manager: "));
+    // ── Entry point ──────────────────────────────────────────────────────────
 
-        List<String> qmanagerNames = new ArrayList<>();
-        for (Configuration configuration : settings.getQmanagers()) {
-            qmanagerNames.add(configuration.getQmanager());
-        }
-
-        qmanagerSelector = new ComboBox<>(qmanagerNames);
-        qmanagerSelector.setReadOnly(true);
-        qmanagerSelector.setDropDownNumberOfRows(Math.max(3, Math.min(10, qmanagerNames.size())));
-        qmanagerSelector.addListener((selectedIndex, previousSelection) -> {
-            if (suppressQmanagerSelectionEvent) {
-                return;
-            }
-            String selectedName = qmanagerSelector.getSelectedItem();
-            if (selectedName != null) {
-                selectQmanager(selectedName, true);
-            }
-        });
-
-        suppressQmanagerSelectionEvent = true;
-        qmanagerSelector.setSelectedItem(currentConfiguration.getQmanager());
-        suppressQmanagerSelectionEvent = false;
-
-        selectorPanel.addComponent(qmanagerSelector);
-        return selectorPanel;
-    }
-
-    private static void selectQmanager(String qmanagerName) {
-        selectQmanager(qmanagerName, true);
-    }
-
-    private static void selectQmanager(String qmanagerName, boolean showErrorDialog) {
-        Configuration selectedConfiguration = settings.findConfiguration(qmanagerName);
-        if (selectedConfiguration == null) {
-            return;
-        }
-        if (currentConfiguration != null && selectedConfiguration.getQmanager().equals(currentConfiguration.getQmanager())) {
-            return;
-        }
-
-        currentConfiguration = selectedConfiguration;
-        settings.setActiveQmanager(selectedConfiguration.getQmanager());
-        queueManager.setConfig(selectedConfiguration);
-        syncQmanagerSelector(selectedConfiguration.getQmanager());
-        update(showErrorDialog);
-    }
-
-    private static void syncQmanagerSelector(String qmanagerName) {
-        if (qmanagerSelector == null) {
-            return;
-        }
-        suppressQmanagerSelectionEvent = true;
-        qmanagerSelector.setSelectedItem(qmanagerName);
-        suppressQmanagerSelectionEvent = false;
-    }
-
-    private static void openQmanagerSelectionDialog() {
-        BasicWindow qmanagerWindow = new BasicWindow("Select Queue Manager");
-        qmanagerWindow.setHints(Arrays.asList(Window.Hint.MODAL, Window.Hint.CENTERED));
-
-        Panel content = new Panel(new LinearLayout(Direction.VERTICAL));
-        content.addComponent(new Label("Choose queue manager:"));
-
-        int width = Math.max(40, columns - 24);
-        int height = Math.max(6, Math.min(settings.getQmanagers().size() + 2, rows - 12));
-        ActionListBox qmanagerList = new ActionListBox(new TerminalSize(width, height));
-
-        for (Configuration configuration : settings.getQmanagers()) {
-            String prefix = configuration.getQmanager().equals(currentConfiguration.getQmanager()) ? "* " : "  ";
-            String label = prefix + configuration.getQmanager();
-            qmanagerList.addItem(label, () -> {
-                qmanagerWindow.close();
-                selectQmanager(configuration.getQmanager(), true);
-            });
-        }
-
-        content.addComponent(qmanagerList.withBorder(Borders.singleLine("Queue managers")));
-        content.addComponent(new com.googlecode.lanterna.gui2.Button("Close", qmanagerWindow::close));
-        qmanagerWindow.setComponent(content);
-        gui.addWindowAndWait(qmanagerWindow);
-    }
-
-    private static void openInfoDialog(String title, String message) {
-        BasicWindow infoWindow = new BasicWindow(title);
-        infoWindow.setHints(Arrays.asList(Window.Hint.MODAL, Window.Hint.CENTERED));
-
-        Panel content = new Panel(new LinearLayout(Direction.VERTICAL));
-        TextBox messageBox = new TextBox(
-                new TerminalSize(Math.max(60, columns - 24), Math.max(4, Math.min(8, rows - 16))),
-                message,
-                TextBox.Style.MULTI_LINE
-        );
-        messageBox.setReadOnly(true);
-        content.addComponent(messageBox.withBorder(Borders.singleLine("Details")));
-        content.addComponent(new com.googlecode.lanterna.gui2.Button("Close", infoWindow::close));
-
-        infoWindow.setComponent(content);
-        gui.addWindowAndWait(infoWindow);
-    }
-
-    private static void openQueueMessagesView(Queue queue) {
-        BasicWindow messagesWindow = new BasicWindow("Messages: " + queue.getName());
-        messagesWindow.setHints(Arrays.asList(Window.Hint.MODAL, Window.Hint.CENTERED));
-
-        Panel content = new Panel(new LinearLayout(Direction.VERTICAL));
-        content.addComponent(new Label("Queue: " + queue.getName()));
-        content.addComponent(new EmptySpace(new TerminalSize(1, 1)));
-
-        int messageListWidth = Math.max(60, columns - 16);
-        int messageListHeight = Math.max(12, rows - 12);
-        ActionListBox messageList = new ActionListBox(new TerminalSize(messageListWidth, messageListHeight));
-
-        List<QueueMessage> messages = queueManager.getQueueMessageDetails(queue.getName(), MESSAGE_PREVIEW_LIMIT);
-        for (QueueMessage message : messages) {
-            if (message.isOpenable()) {
-                messageList.addItem(message.getPreview(), () -> openMessageDetailView(queue, message));
-            } else {
-                messageList.addItem(message.getPreview(), null);
-            }
-        }
-
-        content.addComponent(messageList.withBorder(Borders.singleLine("Messages")));
-        content.addComponent(new com.googlecode.lanterna.gui2.Button("Close", messagesWindow::close));
-
-        messagesWindow.setComponent(content);
-        gui.addWindowAndWait(messagesWindow);
-    }
-
-    private static void openMessageDetailView(Queue queue, QueueMessage message) {
-        BasicWindow messageWindow = new BasicWindow("Message Details");
-        messageWindow.setHints(Arrays.asList(Window.Hint.MODAL, Window.Hint.CENTERED));
-
-        Panel content = new Panel(new LinearLayout(Direction.VERTICAL));
-        content.addComponent(new Label("Queue: " + queue.getName()));
-        content.addComponent(new Label("Message ID:"));
-
-        TextBox idBox = new TextBox(new TerminalSize(Math.max(60, columns - 20), 3), message.getMessageId(), TextBox.Style.MULTI_LINE);
-        idBox.setReadOnly(true);
-        content.addComponent(idBox.withBorder(Borders.singleLine()));
-
-        content.addComponent(new Label("Body:"));
-        TextBox bodyBox = new TextBox(new TerminalSize(Math.max(60, columns - 20), Math.max(10, rows - 16)), message.getBody(), TextBox.Style.MULTI_LINE);
-        bodyBox.setReadOnly(true);
-        content.addComponent(bodyBox.withBorder(Borders.singleLine()));
-
-        content.addComponent(new com.googlecode.lanterna.gui2.Button("Close", messageWindow::close));
-        messageWindow.setComponent(content);
-        gui.addWindowAndWait(messageWindow);
-    }
-
-}
-
-/*
-//Timer function
-class SayHello extends TimerTask {
-    public void run() {
-       System.out.println("Hello World!");
+    public static void main(String[] args) throws Exception {
+        new QC().run();
     }
 }
 
-// And From your main() method or any other method
-Timer timer = new Timer();
-timer.schedule(new SayHello(), 0, 5000);
------------------------------
-public class RemindTask extends TimerTask {
-    public void run() {
-      System.out.println(" Hello World!");
-    }
-    public static void main(String[] args){
-       Timer timer = new Timer();
-       timer.schedule(new RemindTask(), 3000,3000);
-    }
-  }
-
-
-
- */

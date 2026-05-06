@@ -6,7 +6,7 @@
  ██████   ██████ 
     ▀▀         
 ```
-Queue Commander is a Lanterna-based terminal UI (TUI) for browsing ActiveMQ queues and messages through Jolokia.
+Queue Commander is a TamboUI-based terminal UI (TUI) for browsing ActiveMQ queues and messages through Jolokia.
 
 ## What you can do
 - List queues and current depth
