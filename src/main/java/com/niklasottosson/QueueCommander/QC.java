@@ -79,6 +79,26 @@ public class QC extends ToolkitApp {
 
     // ── Render ───────────────────────────────────────────────────────────────
 
+    // ── Sizing helpers ───────────────────────────────────────────────────────
+
+    private int terminalColumns() {
+        return runner().tuiRunner().terminal().size().width();
+    }
+
+    private int terminalRows() {
+        return runner().tuiRunner().terminal().size().height();
+    }
+
+    /** Returns (percent)% of terminal width, floored to min. */
+    private int pctW(int percent, int min) {
+        return Math.max(min, (terminalColumns() * percent) / 100);
+    }
+
+    /** Returns (percent)% of terminal height, floored to min. */
+    private int pctH(int percent, int min) {
+        return Math.max(min, (terminalRows() * percent) / 100);
+    }
+
     @Override
     protected Element render() {
 
@@ -202,6 +222,7 @@ public class QC extends ToolkitApp {
 
         // ── Overlaid dialogs ──────────────────────────────────────────────
         if (currentView == View.QMANAGER_DIALOG) {
+            qmanagerListEl.length(pctH(50, 6));
             return stack(
                 mainView,
                 dialog("Select Queue Manager",
@@ -210,11 +231,12 @@ public class QC extends ToolkitApp {
                         qmanagerListEl,
                         text("[Enter] Select   [Esc] Cancel")
                     )
-                ).rounded()
+                ).width(pctW(70, 40)).rounded()
             );
         }
 
         if (currentView == View.MESSAGE_LIST) {
+            messageListEl.length(pctH(65, 12));
             return stack(
                 mainView,
                 dialog("Messages: " + (viewedQueue != null ? viewedQueue.getName() : ""),
@@ -222,11 +244,12 @@ public class QC extends ToolkitApp {
                         messageListEl,
                         text("[Enter] Open message   [Esc] Back")
                     )
-                ).rounded()
+                ).width(pctW(85, 60)).rounded()
             );
         }
 
         if (currentView == View.MESSAGE_DETAIL) {
+            messageDetailEl.length(pctH(70, 12));
             return stack(
                 mainView,
                 dialog("Message Detail",
@@ -234,7 +257,7 @@ public class QC extends ToolkitApp {
                         messageDetailEl,
                         text("[↑↓] Scroll   [Esc] Back")
                     )
-                ).rounded()
+                ).width(pctW(85, 60)).rounded()
             );
         }
 
@@ -315,7 +338,7 @@ public class QC extends ToolkitApp {
 
     private static String getLabel(int maxLength) {
         if (maxLength == 0) {
-            maxLength = 30;
+            maxLength = 130;
         }
         return StringUtils.rightPad("Name", maxLength) + "    Depth";
     }
